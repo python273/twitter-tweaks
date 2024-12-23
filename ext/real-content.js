@@ -92,6 +92,8 @@ const findNextElement = (current, selector) => {
     return elements[index + 1] || null;
 };
 
+// FIX: doesn't work when a tweet is not already focused via default hotkeys
+// so need to click `j` for new hotkeys to work
 document.body.addEventListener('keydown', async (e) => {
     if (e.key !== 'z' && e.key !== 'a' && e.key !== 'q' && e.key !== 'h' && e.key != 'y') return;
     if (document.activeElement !== e.target) return;

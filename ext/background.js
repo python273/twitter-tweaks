@@ -371,6 +371,8 @@ function listenerTweetDetail(details) {
       Object.assign(t, tweet);
     }
 
+    // show full tweet text without clicking "Show More"
+    // TODO: add style [data-testid="tweetText"] { -webkit-line-clamp: unset !important; }
     const allTweets = find_all_tweets(data);
     for (let t of allTweets) {
       if (!t.note_tweet) { continue; }
