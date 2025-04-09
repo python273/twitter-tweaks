@@ -303,36 +303,40 @@ function listenerUser(details) {
   
     const data = JSON.parse(chunks.join(""));
 
-    let instr = data.data.user.result.timeline_v2.timeline.instructions;
-    let TimelineAddEntries = null;
-    for (let ins of instr) {
-      if (ins.type === 'TimelineAddEntries') {
-        TimelineAddEntries = ins;
+    try {
+      let instr = data.data.user.result.timeline.timeline.instructions;
+      let TimelineAddEntries = null;
+      for (let ins of instr) {
+        if (ins.type === 'TimelineAddEntries') {
+          TimelineAddEntries = ins;
+        }
       }
-    }
 
-    if (TimelineAddEntries) {
-      const ientrs = TimelineAddEntries.entries;
-      const newEntries = [];
-      for (let i of ientrs) {
-        console.log(i.entryId, i.sortIndex);
-        if (/^cursor-/.test(i.entryId)) {
+      if (TimelineAddEntries) {
+        const ientrs = TimelineAddEntries.entries;
+        const newEntries = [];
+        for (let i of ientrs) {
+          console.log(i.entryId, i.sortIndex);
+          if (/^cursor-/.test(i.entryId)) {
+            newEntries.push(i);
+            continue;
+          }
+
+          if (
+            /^promoted-tweet-/.test(i.entryId)
+            || /^who-to-follow-/.test(i.entryId)
+            || /^who-to-subscribe-/.test(i.entryId)) {
+            console.log('skipping');
+            continue;
+          }
           newEntries.push(i);
-          continue;
         }
-
-        if (
-          /^promoted-tweet-/.test(i.entryId)
-          || /^who-to-follow-/.test(i.entryId)
-          || /^who-to-subscribe-/.test(i.entryId)) {
-          console.log('skipping');
-          continue;
-        }
-        newEntries.push(i);
+        TimelineAddEntries.entries = newEntries;
       }
-      TimelineAddEntries.entries = newEntries;
+      unpackNoteTweets(data);
+    } catch (e) {
+        console.error(e);
     }
-    unpackNoteTweets(data);
     filter.write(encoder.encode(JSON.stringify(data)));
     filter.close();
   }
