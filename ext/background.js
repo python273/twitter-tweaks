@@ -1,5 +1,13 @@
 console.log('reload');
 
+const writeDatas = (k, v) => {
+  const urlTemplate = localStorage.getItem('data-collection-url');
+  if (!urlTemplate) return Promise.resolve(false);
+  return fetch(
+    urlTemplate.replace('{key}', encodeURIComponent(k)),
+    {method: 'POST', body: v}).then(r => r.ok);
+};
+
 const htmlEntities = {amp: '&', lt: '<', gt: '>', quot: '"', '#039': "'"}
 const reHtmlEntities = new RegExp(`&(${Object.keys(htmlEntities).join('|')});`, 'g');
 function unescapeHtmlEntities(str) {
@@ -25,6 +33,62 @@ const saveSettings = () => {
 let _saveSettingsInterval = setInterval(saveSettings, 10000);
 
 
+function find_dicts_deep(data, fnMatch) {
+  return find_dicts_deep_paths(data, fnMatch).map(([_, obj]) => obj);
+}
+
+const find_all_tweets = (data) => find_dicts_deep(data, (d) => d.__typename === 'Tweet');
+
+function unpackNoteTweets(data) {
+  // show full tweet text without clicking "Show More"
+  // TODO: add style [data-testid="tweetText"] { -webkit-line-clamp: unset !important; }
+  const allTweets = find_all_tweets(data);
+  for (let t of allTweets) {
+    if (!t.note_tweet) { continue; }
+
+    const noteTweetText = t.note_tweet.note_tweet_results.result.text;
+
+    const [displayA, displayB] = t.legacy.display_text_range;
+    const beforeText = Array.from(t.legacy.full_text).slice(0, displayA).join('');
+    let visibleText = unescapeHtmlEntities(
+      Array.from(t.legacy.full_text).slice(displayA, displayB).join('')
+    );
+
+    if (!noteTweetText.startsWith(visibleText)) {
+      console.log('note tweet not starts with visible text');
+      console.log(noteTweetText);
+      console.log(visibleText);
+      continue;
+    }
+    t.legacy.full_text = beforeText + noteTweetText;
+    t.note_tweet.is_expandable = false;
+    t.legacy.display_text_range[1] = displayA + noteTweetText.length;
+
+    // FIX: broken in some cases?
+    const entitySet = t.note_tweet.note_tweet_results.result.entity_set;
+    for (const entityType in entitySet) {
+      for (const entity of entitySet[entityType]) {
+        if (entity.indices) {
+          entity.indices[0] += displayA;
+          entity.indices[1] += displayA;
+        }
+      }
+    }
+    t.legacy.entities = entitySet;
+  }
+  for (let t of allTweets) {
+    if (t.legacy?.entities?.urls) {
+      for (const url of t.legacy.entities.urls) {
+        console.log(url);
+        url.display_url = url.expanded_url;
+        console.log(url);
+
+      }
+    }
+  }
+}
+
+
 function listenerHomeTimeline(details) {
   console.log(`HomeTimeline: ${details.url}`);
 
@@ -38,8 +102,13 @@ function listenerHomeTimeline(details) {
     try {
       console.log('decoder', decoder.decode(undefined, {stream: false}));
     } catch {}
-  
-    const data = JSON.parse(chunks.join(""));
+    
+    const rawData = chunks.join("");
+    const data = JSON.parse(rawData);
+    setTimeout(() => {
+      writeDatas(`home-${details.cookieStoreId || 'default'}-${Date.now()}`, rawData)
+        .catch(err => console.error('Data save failed', err));
+    }, 0);
 
     const feedbackKeyMap = {};
     if (data.data.home.home_timeline_urt.responseObjects) {
@@ -263,7 +332,7 @@ function listenerUser(details) {
       }
       TimelineAddEntries.entries = newEntries;
     }
-
+    unpackNoteTweets(data);
     filter.write(encoder.encode(JSON.stringify(data)));
     filter.close();
   }
@@ -287,6 +356,10 @@ function listenerFeedback(details) {
 
   const fb = FEEDBACK_TO_TWEET[meta];
   if (fb) {
+    setTimeout(() => {
+      writeDatas(`feedback-${details.cookieStoreId || 'default'}-${fb.tweetId}`, '0')
+        .catch(err => console.error('Data save failed', err));
+    }, 0);
     SKIP_TWEET_IDS.add(fb.tweetId);
     if (fb.type === 'SeeFewer') {
       SKIP_USER_IDS.add(fb.tweetUserId);
@@ -339,12 +412,6 @@ function find_dicts_deep_paths(data, fnMatch, path = []) {
   return results;
 }
 
-function find_dicts_deep(data, fnMatch) {
-  return find_dicts_deep_paths(data, fnMatch).map(([_, obj]) => obj);
-}
-
-const find_all_tweets = (data) => find_dicts_deep(data, (d) => d.__typename === 'Tweet');
-
 function listenerTweetDetail(details) {
   console.log(`TweetDetail: ${details.url}`);
 
@@ -359,8 +426,14 @@ function listenerTweetDetail(details) {
     try {
       console.log('decoder', decoder.decode(undefined, {stream: false}));
     } catch {}
-  
-    const data = JSON.parse(chunks.join(""));
+    const rawData = chunks.join("");
+    const data = JSON.parse(rawData);
+
+    setTimeout(() => {
+      const key = `tweetdetail-${details.cookieStoreId || 'default'}-${Date.now()}`;
+      writeDatas(key + '-url', details.url).catch(err => console.error('Data save failed', err));
+      writeDatas(key, rawData).catch(err => console.error('Data save failed', err));
+    }, 0);
 
     // show tweets from muted accounts in replies
     for (let t of find_dicts_deep(data, (d) => d.__typename === 'TweetWithVisibilityResults')) {
@@ -371,51 +444,7 @@ function listenerTweetDetail(details) {
       Object.assign(t, tweet);
     }
 
-    // show full tweet text without clicking "Show More"
-    // TODO: add style [data-testid="tweetText"] { -webkit-line-clamp: unset !important; }
-    const allTweets = find_all_tweets(data);
-    for (let t of allTweets) {
-      if (!t.note_tweet) { continue; }
-
-      const noteTweetText = t.note_tweet.note_tweet_results.result.text;
-
-      const [displayA, displayB] = t.legacy.display_text_range;
-      const beforeText = Array.from(t.legacy.full_text).slice(0, displayA).join('');
-      let visibleText = unescapeHtmlEntities(
-        Array.from(t.legacy.full_text).slice(displayA, displayB).join('')
-      );
-
-      if (!noteTweetText.startsWith(visibleText)) {
-        console.log('note tweet not starts with visible text');
-        console.log(noteTweetText);
-        console.log(visibleText);
-        continue;
-      }
-      t.legacy.full_text = beforeText + noteTweetText;
-      t.note_tweet.is_expandable = false;
-      t.legacy.display_text_range[1] = displayA + noteTweetText.length;
-
-      const entitySet = t.note_tweet.note_tweet_results.result.entity_set;
-      for (const entityType in entitySet) {
-        for (const entity of entitySet[entityType]) {
-          if (entity.indices) {
-            entity.indices[0] += displayA;
-            entity.indices[1] += displayA;
-          }
-        }
-      }
-      t.legacy.entities = entitySet;
-    }
-    for (let t of allTweets) {
-      if (t.legacy?.entities?.urls) {
-        for (const url of t.legacy.entities.urls) {
-          console.log(url);
-          url.display_url = url.expanded_url;
-          console.log(url);
-
-        }
-      }
-    }
+    unpackNoteTweets(data);
     filter.write(encoder.encode(JSON.stringify(data)));
     filter.close();
   }
